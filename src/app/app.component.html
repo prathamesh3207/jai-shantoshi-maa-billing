@@ -1,0 +1,358 @@
+<div class="dashboard-shell">
+  <header class="glass-header">
+    <div class="brand">
+      <div class="logo-badge">📰</div>
+      <div>
+        <h1>JAI SHANTOSHI MAA</h1>
+        <div class="subtitle-row">
+          <span class="subtitle">Newspaper Distribution &amp; Billing • <strong>{{ billing.formattedMonthLabel() }}</strong></span>
+          <span class="storage-badge">💾 {{ billing.lastSavedAt() }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <input
+        type="month"
+        class="month-picker"
+        [ngModel]="billing.billingMonth()"
+        (ngModelChange)="billing.changeBillingMonth($event)" />
+      <button
+        class="btn-secondary"
+        [class.btn-edit-active]="dayEditMode()"
+        (click)="dayEditMode.set(!dayEditMode())">
+        {{ dayEditMode() ? '✏️ Editing Day Rates (ON)' : '👆 Toggle Absent Mode' }}
+      </button>
+      <button class="btn-secondary" (click)="openReplaceModal()">🔄 Find &amp; Replace</button>
+      <button class="btn-secondary" (click)="showAddModal.set(true)">➕ Add Flat</button>
+      <button class="btn-secondary" (click)="showRateModal.set(true)">⚙️ Rate Card</button>
+      <button class="btn-secondary" (click)="downloadCsv()">⬇️ Export CSV</button>
+      <label class="btn-primary">
+        📤 Import CSV
+        <input type="file" accept=".csv" (change)="onFileUpload($event)" hidden />
+      </label>
+      <button class="btn-ghost" (click)="confirmReset()">↺ Reset</button>
+    </div>
+  </header>
+
+  <section class="kpi-grid">
+    <div class="kpi-card">
+      <span class="kpi-label">Active Subscriptions</span>
+      <h2 class="kpi-value">{{ billing.summaryStats().totalFlats }}</h2>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Deliveries Completed</span>
+      <h2 class="kpi-value text-emerald">{{ billing.summaryStats().totalPresentDays }}</h2>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Absent / Skipped Days</span>
+      <h2 class="kpi-value text-rose">{{ billing.summaryStats().totalAbsentDays }}</h2>
+    </div>
+    <div class="kpi-card highlight">
+      <span class="kpi-label">Grand Total ({{ billing.formattedMonthLabel() }})</span>
+      <h2 class="kpi-value">₹{{ billing.summaryStats().totalRevenue | number }}</h2>
+    </div>
+  </section>
+
+  <section class="controls-bar">
+    <div class="society-pills">
+      @for (soc of billing.societies(); track soc) {
+        <button
+          class="pill"
+          [class.active]="billing.selectedSociety() === soc"
+          (click)="billing.selectedSociety.set(soc)">
+          {{ soc }}
+        </button>
+      }
+    </div>
+
+    <input
+      type="text"
+      class="search-input"
+      placeholder="Search flat, wing, or newspaper..."
+      [ngModel]="billing.searchQuery()"
+      (ngModelChange)="billing.searchQuery.set($event)" />
+  </section>
+
+  <div class="table-container">
+    <table class="delivery-table">
+      <thead>
+        <tr>
+          <th class="sticky-col col-soc">Society / Wing</th>
+          <th class="sticky-col col-flat">Flat</th>
+          <th class="sticky-col col-paper">Newspaper &amp; Schedule</th>
+          @for (d of billing.daysHeader(); track d.dayNum) {
+            <th class="day-col" [class.weekend]="d.isWeekend">
+              <div class="day-num">{{ d.dayNum }}</div>
+              <div class="day-name">{{ d.weekday }}</div>
+            </th>
+          }
+          <th>Rate ₹/Day</th>
+          <th>Present</th>
+          <th>Absent</th>
+          <th>Paper ₹</th>
+          <th>Deliv. ₹</th>
+          <th class="sticky-right">Grand Total &amp; Bill</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of billing.calculatedSubscriptions(); track row.id) {
+          <tr>
+            <td class="sticky-col col-soc">
+              <span class="soc-tag">{{ row.society }}</span>
+              <span class="wing-badge">{{ row.wing }}</span>
+            </td>
+            <td class="sticky-col col-flat font-bold">{{ row.flatNo }}</td>
+            <td class="sticky-col col-paper">
+              <input
+                #paperInput
+                type="text"
+                class="inline-paper-input"
+                [value]="row.newspaper"
+                (change)="billing.updateFlatNewspaper(row.id, paperInput.value)" />
+            </td>
+
+            @for (day of row.breakdown; track day.dayNum; let idx = $index) {
+              <td
+                class="day-cell"
+                [class.edit-cursor]="dayEditMode()"
+                [title]="day.dateStr + ' (' + day.weekday + ') • ₹' + day.charge"
+                (click)="onDayCellClick(row, idx, day)"
+                (contextmenu)="openDayEditor(row, idx, day, $event)">
+                @if (day.status === 'ABSENT' || day.status === 0) {
+                  <span class="status-dot absent">0</span>
+                } @else if (day.charge === 0) {
+                  <span class="status-dot unscheduled">·</span>
+                } @else if (typeof day.status === 'number') {
+                  <span class="status-dot custom">₹{{ day.status }}</span>
+                } @else {
+                  <span class="status-dot present">₹{{ day.charge }}</span>
+                }
+              </td>
+            }
+
+            <td class="text-center">
+              <input
+                #rateInput
+                type="number"
+                class="inline-price-input"
+                [value]="row.effectiveDailyRate"
+                (change)="billing.updateFlatDailyRate(row.id, +rateInput.value)" />
+            </td>
+            <td class="text-center font-semibold text-emerald">{{ row.daysPresent }}</td>
+            <td class="text-center text-rose">{{ row.daysAbsent }}</td>
+            <td class="text-right">₹{{ row.paperAmount }}</td>
+            <td class="text-center">
+              <input
+                #delivInput
+                type="number"
+                class="inline-price-input"
+                [value]="row.deliveryCharge"
+                (change)="billing.updateFlatDeliveryCharge(row.id, +delivInput.value)" />
+            </td>
+            <td class="sticky-right grand-total-cell">
+              <span class="amount-text">₹{{ row.grandTotal }}</span>
+              <button class="btn-bill" (click)="openInvoice(row)">🧾 Bill</button>
+              <button class="btn-del" (click)="billing.deleteSubscription(row.id)">🗑</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+  @if (showReplaceModal()) {
+    <div class="modal-backdrop" (click)="showReplaceModal.set(false)">
+      <div class="modal-card" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>🔄 Bulk Find &amp; Replace Newspaper</h3>
+          <button class="close-btn" (click)="showReplaceModal.set(false)">✕</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Apply To Society
+            <select
+              [(ngModel)]="replaceScopeSociety"
+              style="background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; padding: 0.55rem 0.75rem; color: #f8fafc;">
+              @for (soc of billing.societies(); track soc) {
+                <option [value]="soc">{{ soc === 'ALL' ? 'ALL SOCIETIES (Everyone)' : soc }}</option>
+              }
+            </select>
+          </label>
+
+          <label>
+            Find Previous Newspaper / Schedule
+            <input
+              type="text"
+              [(ngModel)]="findNewspaperText"
+              placeholder="e.g. T + AS  or  (Sunday)  or  GR" />
+          </label>
+
+          <label>
+            Replace With New Value
+            <input
+              type="text"
+              [(ngModel)]="replaceNewspaperText"
+              placeholder="e.g. T + AS + Wealth  or  (Sat and Sun)" />
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" [(ngModel)]="replaceExactOnly" />
+            <span>Match entire cell exact text only</span>
+          </label>
+        </div>
+
+        @if (replaceStatusMsg()) {
+          <p style="margin: 0.85rem 0 0; font-size: 0.82rem; font-weight: 600; color: #34d399;">
+            {{ replaceStatusMsg() }}
+          </p>
+        }
+
+        <div class="modal-footer">
+          <button class="btn-secondary" (click)="showReplaceModal.set(false)">Close</button>
+          <button class="btn-primary" (click)="executeBulkReplace()">Replace All Matching</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (editingDayCell(); as cell) {
+    <div class="modal-backdrop" (click)="editingDayCell.set(null)">
+      <div class="modal-card modal-sm" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Edit Individual Day Rate</h3>
+          <button class="close-btn" (click)="editingDayCell.set(null)">✕</button>
+        </div>
+        <p class="modal-subtext">
+          <strong>{{ cell.flatLabel }}</strong><br />
+          Date: {{ cell.dateStr }} ({{ cell.weekday }})
+        </p>
+        <div class="form-grid">
+          <label>
+            Custom Amount for This Day (₹) — Enter 0 for Absent
+            <input
+              type="number"
+              [(ngModel)]="cell.amount"
+              (keydown.enter)="saveSingleDayRate()"
+              autofocus />
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-ghost" (click)="resetSingleDayRate()">Use Default Rate</button>
+          <button class="btn-primary" (click)="saveSingleDayRate()">Apply ₹{{ cell.amount || 0 }}</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showAddModal()) {
+    <div class="modal-backdrop" (click)="showAddModal.set(false)">
+      <div class="modal-card" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Register New Flat Subscription</h3>
+          <button class="close-btn" (click)="showAddModal.set(false)">✕</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Society Name
+            <input type="text" [(ngModel)]="newFlat.society" placeholder="e.g. SAMARPAN" />
+          </label>
+          <label>
+            Wing
+            <input type="text" [(ngModel)]="newFlat.wing" placeholder="e.g. C" />
+          </label>
+          <label>
+            Flat Number
+            <input type="text" [(ngModel)]="newFlat.flatNo" placeholder="e.g. 1502" />
+          </label>
+          <label>
+            Newspaper Combo / Schedule
+            <input type="text" [(ngModel)]="newFlat.newspaper" placeholder="e.g. T + AS" />
+          </label>
+          <label>
+            Monthly Delivery Charge (₹)
+            <input type="number" [(ngModel)]="newFlat.deliveryCharge" />
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" (click)="showAddModal.set(false)">Cancel</button>
+          <button class="btn-primary" (click)="submitNewFlat()">Save Subscription</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showRateModal()) {
+    <div class="modal-backdrop" (click)="showRateModal.set(false)">
+      <div class="modal-card modal-wide" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Master Newspaper Rate Card (₹ / Day)</h3>
+          <button class="close-btn" (click)="showRateModal.set(false)">✕</button>
+        </div>
+
+        <div class="add-rate-bar">
+          <input type="text" [(ngModel)]="newPaperName" placeholder="Add paper code (e.g. Sakal)" />
+          <input type="number" [(ngModel)]="newPaperRate" class="rate-num-input" />
+          <button class="btn-primary" (click)="addRateEntry()">+ Add Rate</button>
+        </div>
+
+        <div class="rate-grid">
+          @for (item of getRateEntries(); track item.name) {
+            <div class="rate-item">
+              <span>{{ item.name }}</span>
+              <input
+                type="number"
+                [ngModel]="item.rate"
+                (ngModelChange)="billing.updateRate(item.name, $event)" />
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (selectedInvoice(); as inv) {
+    <div class="modal-backdrop" (click)="selectedInvoice.set(null)">
+      <div id="printable-invoice" class="modal-card invoice-card" (click)="$event.stopPropagation()">
+        <div class="invoice-top">
+          <div>
+            <h2>JAI SHANTOSHI MAA</h2>
+            <p>Monthly Newspaper Bill • {{ billing.formattedMonthLabel() }}</p>
+          </div>
+          <button class="close-btn no-print" (click)="selectedInvoice.set(null)">✕</button>
+        </div>
+
+        <div class="invoice-meta">
+          <div><strong>Society:</strong> {{ inv.society }} (Wing {{ inv.wing }})</div>
+          <div><strong>Flat No:</strong> {{ inv.flatNo }}</div>
+          <div><strong>Subscription:</strong> {{ inv.newspaper }}</div>
+          <div><strong>Effective Rate:</strong> ₹{{ inv.effectiveDailyRate }}/day</div>
+        </div>
+
+        <div class="invoice-summary">
+          <div class="inv-row">
+            <span>Days Delivered ({{ inv.daysPresent }} days)</span>
+            <span>₹{{ inv.paperAmount }}</span>
+          </div>
+          <div class="inv-row">
+            <span>Absent / Skipped Days</span>
+            <span>{{ inv.daysAbsent }} days</span>
+          </div>
+          <div class="inv-row">
+            <span>Monthly Delivery Charge</span>
+            <span>₹{{ inv.deliveryCharge }}</span>
+          </div>
+          <div class="inv-row total">
+            <span>GRAND TOTAL DUE</span>
+            <span>₹{{ inv.grandTotal }}</span>
+          </div>
+        </div>
+
+        <div class="modal-footer no-print">
+          <button class="btn-secondary" (click)="printInvoice()">🖨️ Print / Save PDF</button>
+          <button class="btn-primary" (click)="shareWhatsApp(inv)">📲 Share on WhatsApp</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>
